@@ -1,0 +1,5 @@
+cpa-panel/
+panel-release/
+__pycache__/
+node_modules/
+dist/
