@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '17 4 * * *'
+    - cron: '17 4 * * 1'
   workflow_dispatch:
     inputs:
       follow-upstream:
@@ -64,13 +64,18 @@ jobs:
           bun-version: '1.3.14'
       - name: Apply the existing callback and quota extensions idempotently
         run: |
+          python scripts/test_apply_cpa_ui_compat.py --source cpa-panel
           python scripts/apply_cpa_ui_compat.py --source cpa-panel
           python scripts/apply_cpa_ui_compat.py --source cpa-panel
       - name: Callback and quota smoke, TypeScript and production build
         working-directory: cpa-panel
         run: |
           bun install --frozen-lockfile
-          bunx prettier --write src/pages/zedCallback.ts src/pages/OAuthPage.tsx src/services/api/oauth.ts src/services/api/client.ts tests/zedCallback.test.ts src/services/api/zedQuota.ts tests/zedQuota.test.ts src/features/authFiles/components/ZedAuthFileQuota.tsx src/features/authFiles/components/ZedAuthFileQuota.module.scss src/features/authFiles/components/ZedBillingSession.tsx src/features/authFiles/components/ZedBillingSession.module.scss src/features/authFiles/components/AuthFileCard.tsx
+          oauth_sources=(src/pages/zedCallback.ts src/pages/OAuthPage.tsx)
+          if [[ -f src/features/oauth/hooks/useOAuthFlows.ts ]]; then
+            oauth_sources=(src/features/oauth/zedCallback.ts src/features/oauth/hooks/useOAuthFlows.ts src/features/oauth/components/OAuthFlowDialog.tsx)
+          fi
+          bunx prettier --write "${oauth_sources[@]}" src/services/api/oauth.ts src/services/api/client.ts tests/zedCallback.test.ts src/services/api/zedQuota.ts tests/zedQuota.test.ts src/features/authFiles/components/ZedAuthFileQuota.tsx src/features/authFiles/components/ZedAuthFileQuota.module.scss src/features/authFiles/components/ZedBillingSession.tsx src/features/authFiles/components/ZedBillingSession.module.scss src/features/authFiles/components/AuthFileCard.tsx
           bun test tests/zedCallback.test.ts tests/zedQuota.test.ts
           bun run build
       - name: Package only the public single-file panel and its fingerprints

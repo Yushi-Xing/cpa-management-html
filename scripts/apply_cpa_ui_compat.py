@@ -5,7 +5,6 @@ from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = 'ee79a794526a30c03748a8864a9ac6589a31833b'
 MARKER = "import { validateZedCallback } from './zedCallback';\n"
 
 
@@ -16,11 +15,15 @@ def replace_once(text, old, new):
 
 
 def apply(destination):
-    page_path = destination / 'src/pages/OAuthPage.tsx'
+    feature_layout = (destination / 'src/features/oauth/hooks/useOAuthFlows.ts').is_file()
+    page_path = destination / ('src/features/oauth/hooks/useOAuthFlows.ts' if feature_layout else 'src/pages/OAuthPage.tsx')
+    hint_path = destination / 'src/features/oauth/components/OAuthFlowDialog.tsx' if feature_layout else page_path
+    helper_path = destination / ('src/features/oauth/zedCallback.ts' if feature_layout else 'src/pages/zedCallback.ts')
+    marker = "import { validateZedCallback } from '@/features/oauth/zedCallback';\n" if feature_layout else MARKER
     client_path = destination / 'src/services/api/client.ts'
     oauth_path = destination / 'src/services/api/oauth.ts'
     page = page_path.read_text(encoding='utf-8')
-    if MARKER in page:
+    if marker in page:
         if "await oauthApi.submitZedCallback" not in page:
             raise ValueError('Incomplete official Zed adaptation')
         print('Official Zed callback adaptation already applied')
@@ -28,19 +31,27 @@ def apply(destination):
         return
     client = client_path.read_text(encoding='utf-8')
     oauth = oauth_path.read_text(encoding='utf-8')
-    page = MARKER + replace_once(page,
+    invalid_callback = "      rejectInput('auth_login.zed_callback_invalid');" if feature_layout else "      showNotification(t('auth_login.zed_callback_invalid'), 'warning');"
+    page = marker + replace_once(page,
         "    if (provider === 'devin') {\n      const callbackError = validateDevinCallback",
-        "    if (provider === 'zed' && !validateZedCallback(callbackInput, states[provider]?.state)) {\n      showNotification(t('auth_login.zed_callback_invalid'), 'warning');\n      return;\n    }\n    if (provider === 'devin') {\n      const callbackError = validateDevinCallback")
+        "    if (provider === 'zed' && !validateZedCallback(callbackInput, states[provider]?.state)) {\n" + invalid_callback + "\n      return;\n    }\n    if (provider === 'devin') {\n      const callbackError = validateDevinCallback")
     page = replace_once(page,
         '      await oauthApi.submitCallback(provider, redirectUrl, attempt.signal);',
         "      if (provider === 'zed') {\n        await oauthApi.submitZedCallback(redirectUrl, states[provider]!.state!, attempt.signal);\n      } else {\n        await oauthApi.submitCallback(provider, redirectUrl, attempt.signal);\n      }")
     page = replace_once(page,
         "      updateProviderState(provider, { callbackSubmitting: false, callbackStatus: 'success' });",
         "      updateProviderState(provider, {\n        callbackSubmitting: false,\n        callbackStatus: 'success',\n        ...(provider === 'zed' ? { callbackUrl: '' } : {}),\n      });")
+    hints = hint_path.read_text(encoding='utf-8') if feature_layout else page
     for suffix in ['hint', 'placeholder']:
-        old = f"                    ? 'auth_login.xai_callback_{suffix}'\n                    : provider.id === 'devin'"
-        new = f"                    ? 'auth_login.xai_callback_{suffix}'\n                    : provider.id === 'zed'\n                      ? 'auth_login.zed_callback_{suffix}'\n                    : provider.id === 'devin'"
-        page = replace_once(page, old, new)
+        if feature_layout:
+            old = f"    ? 'auth_login.xai_callback_{suffix}'\n    : isDevin"
+            new = f"    ? 'auth_login.xai_callback_{suffix}'\n    : providerId === 'zed'\n      ? 'auth_login.zed_callback_{suffix}'\n    : isDevin"
+        else:
+            old = f"                    ? 'auth_login.xai_callback_{suffix}'\n                    : provider.id === 'devin'"
+            new = f"                    ? 'auth_login.xai_callback_{suffix}'\n                    : provider.id === 'zed'\n                      ? 'auth_login.zed_callback_{suffix}'\n                    : provider.id === 'devin'"
+        hints = replace_once(hints, old, new)
+    if not feature_layout:
+        page = hints
     # The original component already renders the shared callback input for plugins.
     # The extension is authenticated by CPA at its declared v0 path; all ordinary
     # OAuth start/status and credential operations continue to use v8.
@@ -90,18 +101,22 @@ class ApiClient {''')
         'en': ['After signing in to Zed, paste the complete 127.0.0.1 redirect from the address bar, even if the page cannot open.', 'http://127.0.0.1:port/?user_id=...&access_token=...', 'Paste the complete callback URL for this Zed login attempt.'],
         'ru': ['После входа в Zed вставьте полный адрес перенаправления 127.0.0.1 из адресной строки, даже если страница не открывается.', 'http://127.0.0.1:port/?user_id=...&access_token=...', 'Вставьте полный URL обратного вызова для текущего входа в Zed.'],
     }
+    for language in ('vi', 'ko'):
+        if (destination / f'src/i18n/locales/{language}.json').is_file():
+            locale_messages[language] = locale_messages['en']
     # This upstream SSR test expects translation keys but has no translation
     # provider. Other suites initialize the shared i18next singleton, making its
     # result depend on test order. Give this test its own key-only instance;
     # retain every original assertion and all application translations.
     fixture_path = destination / 'tests/providerModelOptions.test.ts'
     fixture = fixture_path.read_text(encoding='utf-8')
-    fixture = replace_once(fixture,
-        "import { renderToStaticMarkup } from 'react-dom/server';",
-        "import { renderToStaticMarkup } from 'react-dom/server';\nimport { I18nextProvider } from 'react-i18next';\nimport { createInstance } from 'i18next';\n\nconst modelOptionsI18n = createInstance();\nawait modelOptionsI18n.init({ lng: 'cimode' });")
-    fixture = replace_once(fixture,
-        "      createElement(ModelAdvancedFields, {\n        entry: { name: 'model', thinkingEnabled: enabled },\n        providerBrand: brand,\n        disabled,\n        supportsThinking: true,\n        onUpdate: () => {},\n      })",
-        "      createElement(\n        I18nextProvider,\n        { i18n: modelOptionsI18n },\n        createElement(ModelAdvancedFields, {\n          entry: { name: 'model', thinkingEnabled: enabled },\n          providerBrand: brand,\n          disabled,\n          supportsThinking: true,\n          onUpdate: () => {},\n        })\n      )")
+    if 'const translations = createInstance();' not in fixture:
+        fixture = replace_once(fixture,
+            "import { renderToStaticMarkup } from 'react-dom/server';",
+            "import { renderToStaticMarkup } from 'react-dom/server';\nimport { I18nextProvider } from 'react-i18next';\nimport { createInstance } from 'i18next';\n\nconst modelOptionsI18n = createInstance();\nawait modelOptionsI18n.init({ lng: 'cimode' });")
+        fixture = replace_once(fixture,
+            "      createElement(ModelAdvancedFields, {\n        entry: { name: 'model', thinkingEnabled: enabled },\n        providerBrand: brand,\n        disabled,\n        supportsThinking: true,\n        onUpdate: () => {},\n      })",
+            "      createElement(\n        I18nextProvider,\n        { i18n: modelOptionsI18n },\n        createElement(ModelAdvancedFields, {\n          entry: { name: 'model', thinkingEnabled: enabled },\n          providerBrand: brand,\n          disabled,\n          supportsThinking: true,\n          onUpdate: () => {},\n        })\n      )")
     # Validate every anchor and locale before changing any file.
     locales = {}
     for language, messages in locale_messages.items():
@@ -109,12 +124,18 @@ class ApiClient {''')
         data = json.loads(path.read_text(encoding='utf-8'))
         for suffix, value in zip(['hint', 'placeholder', 'invalid'], messages):
             data['auth_login']['zed_callback_' + suffix] = value
-        data['zed_billing'] = {'expired': {'zh-CN': '账单会话过期时，请更新账单 Cookie。', 'zh-TW': '帳單會話過期時，請更新帳單 Cookie。', 'en': 'If the billing session expired, update the billing cookie.', 'ru': 'Если платёжная сессия истекла, обновите cookie.'}[language]}
+        data['zed_billing'] = {'expired': {'zh-CN': '账单会话过期时，请更新账单 Cookie。', 'zh-TW': '帳單會話過期時，請更新帳單 Cookie。', 'en': 'If the billing session expired, update the billing cookie.', 'ru': 'Если платёжная сессия истекла, обновите cookie.'}.get(language, 'If the billing session expired, update the billing cookie.')}
         locales[path] = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
-    for path, content in {page_path: page, client_path: client, oauth_path: oauth, fixture_path: fixture, **locales}.items():
+    changes = {page_path: page, client_path: client, oauth_path: oauth, fixture_path: fixture, **locales}
+    if feature_layout:
+        changes[hint_path] = hints
+    for path, content in changes.items():
         path.write_text(content, encoding='utf-8')
-    shutil.copy2(ROOT / 'compat/cpa/zedCallback.ts', destination / 'src/pages/zedCallback.ts')
-    shutil.copy2(ROOT / 'compat/cpa/zedCallback.test.ts', destination / 'tests/zedCallback.test.ts')
+    shutil.copy2(ROOT / 'compat/cpa/zedCallback.ts', helper_path)
+    callback_test = (ROOT / 'compat/cpa/zedCallback.test.ts').read_text(encoding='utf-8')
+    if feature_layout:
+        callback_test = callback_test.replace('@/pages/zedCallback', '@/features/oauth/zedCallback')
+    (destination / 'tests/zedCallback.test.ts').write_text(callback_test, encoding='utf-8')
     print('Adapted official CPA OAuth card: authenticated Zed paste, original v8 polling and credentials')
     apply_quota(destination)
 
@@ -158,6 +179,9 @@ def apply_quota(destination):
         'en': ['Zed quota', 'Refresh quota', 'Refresh to read the current plan and usage.', 'Unable to read quota. Check the network and credential, then retry.', 'Plan', 'Token Spend (USD)', 'Token spend limit (USD)', 'Remaining credit (USD)', 'Not provided', 'Models lists the dynamically discovered models for this credential, using original names by default.'],
         'ru': ['Квота Zed', 'Обновить квоту', 'Обновите, чтобы получить текущий тариф и использование.', 'Не удалось получить квоту. Проверьте сеть и учётные данные.', 'Тариф', 'Token Spend (USD)', 'Лимит расходов (USD)', 'Остаток (USD)', 'Не указано', 'Кнопка моделей показывает динамический каталог учётной записи с исходными именами моделей.'],
     }
+    for language in ('vi', 'ko'):
+        if (destination / f'src/i18n/locales/{language}.json').is_file():
+            messages[language] = messages['en']
     keys = ['title', 'refresh', 'idle', 'error', 'plan', 'used', 'limit', 'remaining', 'unknown', 'model_hint']
     locales = {}
     for language, values in messages.items():
@@ -169,15 +193,15 @@ def apply_quota(destination):
             'zh-TW': '編輯器登入憑證未提供 Token Spend。請求次數不代表金額，請至 Zed 帳單頁面查看實際金額用量。',
             'en': 'The editor credential does not provide Token Spend. Request counts are not dollar amounts. View actual spend in the Zed billing dashboard.',
             'ru': 'Учётные данные редактора не предоставляют Token Spend. Число запросов не является суммой в долларах. Фактические расходы доступны в платёжной панели Zed.',
-        }[language]
-        data['zed_quota']['fixed_plan'] = {'zh-CN': '固定显示', 'zh-TW': '固定顯示', 'en': 'Fixed display', 'ru': 'Фиксированное отображение'}[language]
+        }.get(language, 'The editor credential does not provide Token Spend. Request counts are not dollar amounts. View actual spend in the Zed billing dashboard.')
+        data['zed_quota']['fixed_plan'] = {'zh-CN': '固定显示', 'zh-TW': '固定顯示', 'en': 'Fixed display', 'ru': 'Фиксированное отображение'}.get(language, 'Fixed display')
         data['zed_quota']['fixed_note'] = {
             'zh-CN': '按配置固定显示：已用 $0 / 总额度 $10，刷新不变。这不是 Zed 实际账单，不会自动扣减或限制请求。',
             'zh-TW': '依設定固定顯示：已用 $0 / 總額度 $10，重新整理不變。這不是 Zed 實際帳單，不會自動扣減或限制請求。',
             'en': 'Fixed display: $0 used of $10, always unchanged. This is not actual Zed billing and does not impose a spending limit.',
             'ru': 'Фиксированное отображение: использовано $0 из $10. Не отражает фактические расходы Zed и не ограничивает запросы.',
-        }[language]
-        data['zed_billing'] = {'expired': {'zh-CN': '账单会话过期时，请更新账单 Cookie。', 'zh-TW': '帳單會話過期時，請更新帳單 Cookie。', 'en': 'If the billing session expired, update the billing cookie.', 'ru': 'Если платёжная сессия истекла, обновите cookie.'}[language]}
+        }.get(language, 'Fixed display: $0 used of $10, always unchanged. This is not actual Zed billing and does not impose a spending limit.')
+        data['zed_billing'] = {'expired': {'zh-CN': '账单会话过期时，请更新账单 Cookie。', 'zh-TW': '帳單會話過期時，請更新帳單 Cookie。', 'en': 'If the billing session expired, update the billing cookie.', 'ru': 'Если платёжная сессия истекла, обновите cookie.'}.get(language, 'If the billing session expired, update the billing cookie.')}
         locales[path] = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
     for path, text in {card_path: card, client_path: client, **locales}.items():
         path.write_text(text, encoding='utf-8')

@@ -16,7 +16,7 @@ management:
 
 ## Actions
 
-推送主线或手动运行 `Build and publish CPA management panel` 构建当前已验证基线。每天检测官方面板更新；候选必须通过 Zed 回调、额度单元测试和 TypeScript 构建才发布，并更新 `panel-upstream.txt`。适配失败保留当前 Release 和基线。手动选择 `follow-upstream` 可立即测试最新官方面板。
+推送主线或手动运行 `Build and publish CPA management panel` 构建当前已验证基线。每周一香港时间 12:17 检测官方面板更新；候选必须通过 Zed 回调、额度单元测试和 TypeScript 构建才发布，并更新 `panel-upstream.txt`。适配失败保留当前 Release 和基线。手动选择 `follow-upstream` 可立即测试最新官方面板。
 
 此仓库仅包含前端适配、MIT 许可证和面板发布流程。Release 只有 `management.html`、`checksums.txt` 和公开的构建指纹。无需跨仓库访问令牌；本仓库使用自己的 Actions 默认令牌发布。
 

@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import { apiClient } from '@/services/api/client';
 import { oauthApi } from '@/services/api/oauth';
 import { validateZedCallback } from '@/pages/zedCallback';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const state = 'a'.repeat(48);
 const callback = 'http://127.0.0.1:47831/?user_id=123&access_token=encrypted-fixture%3D%3D';
@@ -58,8 +58,13 @@ describe('Zed plugin callback on the existing OAuth card', () => {
   });
 
   test('keeps the existing shared card, cancellation, polling and credential notification', () => {
-    const page = readFileSync(new URL('../src/pages/OAuthPage.tsx', import.meta.url), 'utf8');
-    expect(page).toContain("provider.kind === 'plugin' || CALLBACK_SUPPORTED.has(provider.id)");
+    const featurePath = new URL('../src/features/oauth/hooks/useOAuthFlows.ts', import.meta.url);
+    const featureLayout = existsSync(featurePath);
+    const page = readFileSync(featureLayout ? featurePath : new URL('../src/pages/OAuthPage.tsx', import.meta.url), 'utf8');
+    const providers = featureLayout
+      ? readFileSync(new URL('../src/features/oauth/providers.ts', import.meta.url), 'utf8')
+      : page;
+    expect(providers).toContain("provider.kind === 'plugin' || CALLBACK_SUPPORTED.has(provider.id)");
     expect(page).toContain('await oauthApi.submitZedCallback(redirectUrl, states[provider]!.state!, attempt.signal)');
     expect(page).toContain('oauthApi.getAuthStatus(state, attempt.signal)');
     expect(page).toContain('notifyAuthFilesChanged()');
