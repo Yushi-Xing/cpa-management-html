@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
@@ -53,6 +54,49 @@ class AdaptationTests(unittest.TestCase):
             self.assertIn('auth_login.zed_callback_placeholder', dialog)
             self.assertIn("rejectInput('auth_login.zed_callback_invalid')", callback)
             self.assertTrue((self.root / 'src/features/oauth/zedCallback.ts').is_file())
+
+    def assert_client_adaptation_is_stable(self):
+        apply(self.root)
+        client = (self.root / 'src/services/api/client.ts').read_text()
+        self.assertEqual(client.count('async postPlugin<'), 1)
+        self.assertEqual(client.count('async postPluginQuota<'), 1)
+        self.assertLess(client.index('const revision = (config as PluginRequestConfig)'),
+                        client.index('config.baseURL = this.apiBase;'))
+        self.assertLess(client.index('async postPluginQuota<'), client.index('async put<'))
+        first = snapshot(self.root)
+        apply(self.root)
+        self.assertEqual(first, snapshot(self.root))
+
+    def test_client_comment_translation_preserves_adaptation_and_documentation(self):
+        path = self.root / 'src/services/api/client.ts'
+        client = path.read_text()
+        client = re.sub(r'(?m)^        // .*baseURL.*$',
+                        '        // Arbitrary translated request comment', client)
+        client = re.sub(r'(?m)^   \* PUT .*$', '   * Arbitrary translated method comment', client)
+        path.write_text(client)
+        self.assert_client_adaptation_is_stable()
+        adapted = path.read_text()
+        self.assertIn('  /**\n   * Arbitrary translated method comment\n   */\n  async put<', adapted)
+
+    def test_client_comments_are_optional(self):
+        path = self.root / 'src/services/api/client.ts'
+        client = re.sub(r'/\*[\s\S]*?\*/|(?m:^[ \t]*//[^\n]*)', '', path.read_text())
+        path.write_text(client)
+        self.assert_client_adaptation_is_stable()
+
+    def test_changed_or_ambiguous_client_code_fails_without_partial_writes(self):
+        path = self.root / 'src/services/api/client.ts'
+        original = path.read_text()
+        for anchor in ('        config.baseURL = this.apiBase;', '  async put<T = unknown>('):
+            self.assertEqual(original.count(anchor), 1)
+            for count in (0, 2):
+                with self.subTest(anchor=anchor, count=count):
+                    path.write_text(original.replace(anchor, anchor * count))
+                    before = snapshot(self.root)
+                    with self.assertRaisesRegex(ValueError, 'refusing a partial Zed adaptation'):
+                        apply(self.root)
+                    self.assertEqual(before, snapshot(self.root))
+        path.write_text(original)
 
     def test_changed_callback_anchor_fails_without_partial_writes(self):
         callback = self.callback_path.read_text()

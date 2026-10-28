@@ -1,6 +1,7 @@
 """Adapt the official single-file CPA panel; no public plugin login resource."""
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 
@@ -10,8 +11,19 @@ MARKER = "import { validateZedCallback } from './zedCallback';\n"
 
 def replace_once(text, old, new):
     if text.count(old) != 1:
-        raise ValueError('Official CPA panel changed; refusing a partial Zed adaptation')
+        raise ValueError(f'Official CPA panel changed; refusing a partial Zed adaptation (anchor: {old!r})')
     return text.replace(old, new)
+
+
+def insert_before_method(text, signature, addition):
+    # Match the method declaration, retaining its documentation regardless of
+    # the comment language. Missing or ambiguous declarations still fail closed.
+    replace_once(text, signature, signature)
+    start = text.index(signature)
+    documentation = re.search(r'(?m)^  /\*\*(?:(?!\*/)[\s\S])*\*/\s*$', text[:start])
+    if documentation:
+        start = documentation.start()
+    return text[:start] + addition + text[start:]
 
 
 def apply(destination):
@@ -60,12 +72,11 @@ def apply(destination):
 }
 
 class ApiClient {''')
-    client = replace_once(client, '        // 设置 baseURL', '''        const revision = (config as PluginRequestConfig).pluginConnectionRevision;
+    client = replace_once(client, '        config.baseURL = this.apiBase;', '''        const revision = (config as PluginRequestConfig).pluginConnectionRevision;
         if (revision !== undefined && revision !== this.connectionRevision) {
           throw new axios.CanceledError('Plugin connection changed');
         }
-        // 设置 baseURL''')
-    anchor = '  /**\n   * PUT 请求\n   */'
+        config.baseURL = this.apiBase;''')
     method = '''  async postPlugin<T = unknown>(
     path: string,
     data: unknown,
@@ -86,7 +97,7 @@ class ApiClient {''')
   }
 
 '''
-    client = replace_once(client, anchor, method + anchor)
+    client = insert_before_method(client, '  async put<T = unknown>(', method)
     oauth = replace_once(oauth, '  submitCallback: (provider:', '''  submitZedCallback: (redirectUrl: string, state: string, signal?: AbortSignal) =>
     apiClient.postPlugin<OAuthCallbackResponse>(
       '/plugins/zed/login/callback',
@@ -172,7 +183,7 @@ def apply_quota(destination):
   }
 
 '''
-        client = replace_once(client, '  /**\n   * PUT 请求\n   */', method + '  /**\n   * PUT 请求\n   */')
+        client = insert_before_method(client, '  async put<T = unknown>(', method)
     messages = {
         'zh-CN': ['Zed 额度', '刷新额度', '点击刷新查询当前套餐和用量。', '额度查询失败，请检查网络和凭证后重试。', '套餐', 'Token Spend（美元）', '金额上限（美元）', '剩余额度（美元）', '未提供', '模型按钮列出此凭证从 Zed 动态发现的模型，默认使用原始模型名。'],
         'zh-TW': ['Zed 額度', '重新整理額度', '點擊重新整理以查詢目前方案與用量。', '額度查詢失敗，請檢查網路與憑證後重試。', '方案', 'Token Spend（美元）', '金額上限（美元）', '剩餘額度（美元）', '未提供', '模型按鈕列出此憑證從 Zed 動態發現的模型，預設使用原始模型名稱。'],
